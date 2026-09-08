@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Binance 信号仪表盘 v2</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0a0e1a;
+      color: #e0e6f0;
+      font-family: 'JetBrains Mono', 'Courier New', monospace;
+      font-size: 13px;
+      min-height: 100vh;
+    }
+    .header {
+      background: linear-gradient(90deg, #0d1421 0%, #111827 100%);
+      border-bottom: 1px solid #1f2d4a;
+      padding: 10px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .header-title { font-size: 16px; font-weight: 700; color: #f0b90b; letter-spacing: 1px; }
+    .header-title span { color: #4a5568; font-weight: 400; font-size: 12px; margin-left: 10px; }
+    .header-meta { display: flex; gap: 20px; font-size: 11px; color: #4a5568; align-items: center; }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: #22c55e; display: inline-block; margin-right: 5px; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+    .refresh-btn {
+      background: #1f2937; border: 1px solid #374151; color: #9ca3af;
+      padding: 5px 14px; border-radius: 6px; cursor: pointer; font-size: 11px;
+      transition: all 0.2s;
+    }
+    .refresh-btn:hover { background: #374151; color: #fff; }
+
+    /* ── 总览 ── */
+    .overview {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 10px;
+      padding: 8px 24px;
+    }
+    .card {
+      background: #111827;
+      border: 1px solid #1f2d4a;
+      border-radius: 8px;
+      padding: 12px 14px;
+      position: relative;
+      overflow: hidden;
+    }
+    .card::before {
+      content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+      background: var(--accent); border-radius: 8px 8px 0 0;
+    }
+    .card-label { font-size: 10px; color: #4a5568; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
+    .card-value { font-size: 20px; font-weight: 700; color: var(--accent); }
+    .card-sub { font-size: 10px; color: #4a5568; margin-top: 3px; }
+
+    /* ── 标签切换 ── */
+    .tabs { display: flex; gap: 4px; padding: 0 24px; margin-bottom: 0; }
+    .tab { background: transparent; border: none; color: #4a5568; padding: 8px 16px; cursor: pointer; font-size: 12px; border-bottom: 2px solid transparent; transition: all 0.2s; }
+    .tab.active { color: #f0b90b; border-bottom-color: #f0b90b; }
+    .tab:hover { color: #9ca3af; }
+
+    /* ── 表格 ── */
+    .table-wrap { padding: 0 24px 24px; }
+    table { width: 100%; border-collapse: collapse; min-width: 1100px; display: block; overflow-x: auto; }
+    th {
+      text-align: left; padding: 10px 10px;
+      font-size: 12px; font-family: 'SimHei', 'Microsoft YaHei', sans-serif;
+      color: #9ca3af; text-transform: uppercase;
+      letter-spacing: 1px; font-weight: 700;
+      border-bottom: 1px solid #1f2d4a; position: sticky; top: 0;
+      background: #0a0e1a; white-space: nowrap; z-index: 10;
+    }
+    tr:hover td { background: #111827; }
+    td { padding: 10px 10px; border-bottom: 1px solid #1a2438; vertical-align: middle; white-space: nowrap; font-family: 'SimHei', 'Microsoft YaHei', sans-serif; font-size: 13px; }
+    .symbol { font-weight: 700; color: #f0b90b; font-size: 15px; }
+    .price { color: #9ca3af; font-size: 14px; }
+    .up { color: #22c55e; font-weight: 700; }
+    .down { color: #ef4444; font-weight: 700; }
+    .neutral { color: #9ca3af; }
+    .net-val { font-weight: 700; font-size: 13px; }
+    .vol-ratio { font-size: 12px; }
+    .vol-hot { color: #f97316; font-weight: 700; }
+    .vol-cold { color: #60a5fa; }
+
+    /* 信号标签 */
+    .tag { display: inline-block; padding: 2px 7px; border-radius: 3px; font-size: 11px; margin: 1px 2px; font-weight: 700; white-space: nowrap; font-family: 'SimHei', 'Microsoft YaHei', sans-serif; }
+    .tag-long     { background: #052e16; color: #22c55e; }
+    .tag-short    { background: #450a0a; color: #ef4444; }
+    .tag-alert    { background: #1c1a07; color: #f59e0b; }
+    .tag-strong   { background: #1e1b4b; color: #a78bfa; }
+    .tag-weak     { background: #450a0a; color: #f87171; }
+    .tag-buy      { background: #052e16; color: #4ade80; }   /* 🟢买入 */
+    .tag-sell     { background: #4a0000; color: #fca5a5; }   /* 🔴卖出 */
+    .tag-struct   { background: #1a1a2e; color: #fbbf24; }   /* 🟡结构 */
+    .tag-extreme  { background: #2e1a00; color: #fb923c; }   /* 🟠极端 */
+
+    /* 信号统计行 */
+    .signal-bar { padding: 8px 24px; display: flex; gap: 16px; font-size: 11px; flex-wrap: wrap; }
+    .signal-stat { display: flex; align-items: center; gap: 6px; }
+    .signal-dot { width: 8px; height: 8px; border-radius: 2px; }
+    .dot-long    { background: #22c55e; }
+    .dot-short   { background: #ef4444; }
+    .dot-buy     { background: #4ade80; }
+    .dot-sell    { background: #fca5a5; }
+    .dot-struct  { background: #fbbf24; }
+    .dot-extreme { background: #fb923c; }
+
+    /* ── 图表 ── */
+    .chart-section { padding: 0 24px 24px; display: none; }
+    .chart-section.active { display: block; }
+    .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+    .chart-title { font-size: 13px; color: #9ca3af; }
+    .chart-select { background: #1f2937; border: 1px solid #374151; color: #e0e6f0; padding: 4px 10px; border-radius: 6px; font-size: 12px; }
+    .chart-canvas { background: #111827; border: 1px solid #1f2d4a; border-radius: 10px; height: 220px; position: relative; }
+    canvas { width: 100%; height: 220px; }
+
+    /* ── 资金费率 ── */
+    .funding-section { padding: 0 24px 24px; display: none; }
+    .funding-section.active { display: block; }
+    .funding-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+    .funding-card { background: #111827; border: 1px solid #1f2d4a; border-radius: 8px; padding: 12px; }
+    .funding-card .sym { font-size: 12px; font-weight: 700; color: #f0b90b; margin-bottom: 5px; }
+    .funding-card .fr { font-size: 17px; font-weight: 700; }
+    .funding-card .mp { font-size: 10px; color: #4a5568; margin-top: 3px; }
+
+    .loading { text-align: center; padding: 40px; color: #4a5568; }
+    .spinner { width: 24px; height: 24px; border: 2px solid #1f2d4a; border-top-color: #f0b90b; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 10px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* 新增字段 */
+    .smart-ratio { font-size: 11px; }
+    .smart-pos { color: #22c55e; }
+    .smart-neg { color: #ef4444; }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <div class="header-title">BINANCE<span>v2 · 18种信号</span></div>
+  </div>
+  <div class="header-meta">
+    <div><span class="dot"></span>实时采集</div>
+    <div id="lastUpdate">—</div>
+    <div id="nowUtc">—</div>
+    <button class="refresh-btn" onclick="loadData()">↻ 刷新</button>
+  </div>
+</div>
+
+<!-- 信号总览 -->
+<div class="overview" id="overview">
+  <div class="card" style="--accent:#f0b90b">
+    <div class="card-label">全市场</div>
+    <div class="card-value" id="totalSignals">—</div>
+    <div class="card-sub">Top20 USDT</div>
+  </div>
+  <div class="card" style="--accent:#22c55e">
+    <div class="card-label">🟢买入信号</div>
+    <div class="card-value" id="buySignals" style="color:#22c55e">—</div>
+    <div class="card-sub">持续流入/大单护盘</div>
+  </div>
+  <div class="card" style="--accent:#ef4444">
+    <div class="card-label">🔴卖出信号</div>
+    <div class="card-value" id="sellSignals" style="color:#ef4444">—</div>
+    <div class="card-sub">连续流出/大单砸盘</div>
+  </div>
+  <div class="card" style="--accent:#fbbf24">
+    <div class="card-label">🟡结构信号</div>
+    <div class="card-value" id="structSignals" style="color:#fbbf24">—</div>
+    <div class="card-sub">聪明钱/鲸鱼倾向</div>
+  </div>
+  <div class="card" style="--accent:#fb923c">
+    <div class="card-label">🟠极端预警</div>
+    <div class="card-value" id="extremeSignals" style="color:#fb923c">—</div>
+    <div class="card-sub">高振幅/超买超卖</div>
+  </div>
+  <div class="card" style="--accent:#a78bfa">
+    <div class="card-label">多头共振</div>
+    <div class="card-value" id="longSignals" style="color:#a78bfa">—</div>
+    <div class="card-sub">价格+净流入同向</div>
+  </div>
+</div>
+
+<!-- 信号统计条 -->
+<div class="signal-bar" id="signalBar">
+  <div class="signal-stat"><div class="signal-dot dot-buy"></div><span id="statBuy">买入 0</span></div>
+  <div class="signal-stat"><div class="signal-dot dot-sell"></div><span id="statSell">卖出 0</span></div>
+  <div class="signal-stat"><div class="signal-dot dot-struct"></div><span id="statStruct">结构 0</span></div>
+  <div class="signal-stat"><div class="signal-dot dot-extreme"></div><span id="statExtreme">极端 0</span></div>
+</div>
+
+<!-- 标签 -->
+<div class="tabs">
+  <button class="tab active" onclick="switchTab('table', this)">📊 信号表格</button>
+  <button class="tab" onclick="switchTab('chart', this)">📈 历史走势</button>
+  <button class="tab" onclick="switchTab('funding', this)">💰 资金费率</button>
+</div>
+
+<!-- 信号表格 -->
+<div class="table-wrap" id="tab-table">
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>币种</th>
+        <th>现价</th>
+        <th>5m%</th>
+        <th>1h%</th>
+        <th>24h%</th>
+        <th>72h%</th>
+        <th>7d%</th>
+        <th>量比</th>
+        <th>5m净流</th>
+        <th>1h净流</th>
+        <th>24h净流</th>
+        <th>72h净流</th>
+        <th>聪明钱</th>
+        <th>信号</th>
+      </tr>
+    </thead>
+    <tbody id="tableBody"><tr><td colspan="15" class="loading"><div class="spinner"></div>加载中...</td></tr></tbody>
+  </table>
+</div>
+
+<!-- 历史图表 -->
+<div class="chart-section" id="tab-chart">
+  <div class="chart-header">
+    <div class="chart-title">净流入走势（24h）+ 买卖柱状图</div>
+    <select class="chart-select" id="chartSymbol" onchange="loadChart()"><option>BTCUSDT</option></select>
+  </div>
+  <div class="chart-canvas"><canvas id="chartCanvas"></canvas></div>
+</div>
+
+<!-- 资金费率 -->
+<div class="funding-section" id="tab-funding">
+  <div class="funding-grid" id="fundingGrid"><div class="loading"><div class="spinner"></div></div></div>
+</div>
+
+<script>
+const API = window.location.origin;
+let lastData = null;
+
+function fmtK(v) {
+  if (v === null || v === undefined) return '—';
+  v = parseFloat(v);
+  if (Math.abs(v) >= 1e6) return (v/1e6).toFixed(2) + 'M';
+  if (Math.abs(v) >= 1e3) return (v/1e3).toFixed(1) + 'K';
+  return v.toFixed(0);
+}
+function fmtPct(v) {
+  if (!v && v !== 0) return '—';
+  const c = v > 0 ? 'up' : v < 0 ? 'down' : 'neutral';
+  return `<span class="${c}">${v >= 0 ? '+' : ''}${v.toFixed(2)}%</span>`;
+}
+function volRatioTag(ratio) {
+  if (!ratio) return '<span class="vol-ratio neutral">—</span>';
+  if (ratio >= 3.0) return `<span class="vol-ratio vol-hot">${ratio.toFixed(1)}x ⚠️</span>`;
+  if (ratio <= 0.6) return `<span class="vol-ratio vol-cold">${ratio.toFixed(1)}x ▼</span>`;
+  return `<span class="vol-ratio neutral">${ratio.toFixed(1)}x</span>`;
+}
+function smartTag(ratio) {
+  if (!ratio || Math.abs(ratio) < 0.1) return '<span class="smart-ratio neutral">—</span>';
+  if (ratio > 0.5) return `<span class="smart-ratio smart-pos">↑${(ratio*100).toFixed(0)}%</span>`;
+  if (ratio < -0.5) return `<span class="smart-ratio smart-neg">↓${(Math.abs(ratio)*100).toFixed(0)}%</span>`;
+  return '<span class="smart-ratio neutral">—</span>';
+}
+function signalTag(s) {
+  // 🟢买入
+  if (s.startsWith('🟢')) return `<span class="tag tag-buy">${s}</span>`;
+  // 🔴卖出
+  if (s.startsWith('🔴')) return `<span class="tag tag-sell">${s}</span>`;
+  // 🟡结构
+  if (s.startsWith('🟡')) return `<span class="tag tag-struct">${s}</span>`;
+  // 🟠极端
+  if (s.startsWith('🟠')) return `<span class="tag tag-extreme">${s}</span>`;
+  // 🚀强势 / 📉弱势 / ⚠️大额流量
+  if (s.startsWith('🚀')) return `<span class="tag tag-strong">${s}</span>`;
+  if (s.startsWith('📉')) return `<span class="tag tag-weak">${s}</span>`;
+  if (s.startsWith('⚠️')) return `<span class="tag tag-alert">${s}</span>`;
+  return `<span class="tag">${s}</span>`;
+}
+
+async function loadData() {
+  try {
+    const r = await fetch(`${API}/api/summary`);
+    const d = await r.json();
+    lastData = d;
+    document.getElementById('lastUpdate').textContent = 'DB: ' + d.db_last_update;
+    document.getElementById('nowUtc').textContent = d.now_utc;
+
+    const items = d.items || [];
+
+    // 统计
+    const buy    = items.filter(x => x.signals.some(s => s.startsWith('🟢'))).length;
+    const sell   = items.filter(x => x.signals.some(s => s.startsWith('🔴'))).length;
+    const struct = items.filter(x => x.signals.some(s => s.startsWith('🟡'))).length;
+    const extreme= items.filter(x => x.signals.some(s => s.startsWith('🟠') || s === '⚠️极端')).length;
+    const long   = items.filter(x => x.signals.includes('多头共振')).length;
+
+    document.getElementById('totalSignals').textContent = items.length;
+    document.getElementById('buySignals').textContent    = buy;
+    document.getElementById('sellSignals').textContent   = sell;
+    document.getElementById('structSignals').textContent= struct;
+    document.getElementById('extremeSignals').textContent= extreme;
+    document.getElementById('longSignals').textContent   = long;
+    document.getElementById('statBuy').textContent    = `买入 ${buy}`;
+    document.getElementById('statSell').textContent  = `卖出 ${sell}`;
+    document.getElementById('statStruct').textContent= `结构 ${struct}`;
+    document.getElementById('statExtreme').textContent= `极端 ${extreme}`;
+
+    // 表格
+    let html = '';
+    items.forEach((item, i) => {
+      const net5c  = item.net5  > 0 ? 'net-green' : item.net5  < 0 ? 'net-red' : '';
+      const net60c = item.net60 > 0 ? 'net-green' : item.net60 < 0 ? 'net-red' : '';
+      const netDc  = item.net_day > 0 ? 'net-green' : item.net_day < 0 ? 'net-red' : '';
+      const net72c = item.net72h > 0 ? 'net-green' : item.net72h < 0 ? 'net-red' : '';
+      const pctC   = (v) => v > 0 ? 'up' : v < 0 ? 'down' : 'neutral';
+
+      const tags = item.signals.map(signalTag).join('');
+      html += `<tr>
+        <td style="color:#4a5568">${i+1}</td>
+        <td class="symbol">${item.symbol}</td>
+        <td class="price">$${item.price.toLocaleString('en', {minimumFractionDigits:2, maximumFractionDigits:4})}</td>
+        <td class="${pctC(item.pct5m)}">${item.pct5m >= 0 ? '+' : ''}${item.pct5m.toFixed(2)}%</td>
+        <td class="${pctC(item.pct1h)}">${item.pct1h >= 0 ? '+' : ''}${item.pct1h.toFixed(2)}%</td>
+        <td>${fmtPct(item.pct)}</td>
+        <td class="${pctC(item.pct72h)}">${item.pct72h >= 0 ? '+' : ''}${item.pct72h.toFixed(2)}%</td>
+        <td class="${pctC(item.pct7d)}">${item.pct7d >= 0 ? '+' : ''}${item.pct7d.toFixed(2)}%</td>
+        <td>${volRatioTag(item.vol_ratio)}</td>
+        <td class="net-val ${net5c}">${fmtK(item.net5)}</td>
+        <td class="net-val ${net60c}">${fmtK(item.net60)}</td>
+        <td class="net-val ${netDc}">${fmtK(item.net_day)}</td>
+        <td class="net-val ${net72c}">${fmtK(item.net72h)}</td>
+        <td>${smartTag(item.smart_ratio)}</td>
+        <td>${tags}</td>
+      </tr>`;
+    });
+    document.getElementById('tableBody').innerHTML = html || '<tr><td colspan="15" style="color:#4a5568;text-align:center;padding:30px">暂无数据</td></tr>';
+
+    // 图表下拉
+    const sel = document.getElementById('chartSymbol');
+    sel.innerHTML = items.slice(0, 15).map(x => `<option>${x.symbol}</option>`).join('');
+
+  } catch(e) {
+    document.getElementById('tableBody').innerHTML = `<tr><td colspan="15" style="color:#ef4444;text-align:center;padding:30px">加载失败: ${e.message}</td></tr>`;
+  }
+}
+
+function switchTab(name, btn) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('tab-table').style.display = name === 'table' ? '' : 'none';
+  document.getElementById('tab-chart').classList.toggle('active', name === 'chart');
+  document.getElementById('tab-funding').classList.toggle('active', name === 'funding');
+  if (name === 'chart' && !window.chartLoaded) { loadChart(); window.chartLoaded = true; }
+  if (name === 'funding' && !window.fundingLoaded) { loadFunding(); window.fundingLoaded = true; }
+}
+
+async function loadChart() {
+  const sym = document.getElementById('chartSymbol').value;
+  try {
+    const r = await fetch(`${API}/api/history/${sym}?hours=24`);
+    const d = await r.json();
+    drawChart(d, sym);
+  } catch(e) { console.error(e); }
+}
+
+function drawChart(data, sym) {
+  const canvas = document.getElementById('chartCanvas');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width = canvas.offsetWidth * 2;
+  const H = canvas.height = canvas.offsetHeight * 2;
+  ctx.scale(2, 2);
+  const w = canvas.offsetWidth, h = canvas.offsetHeight;
+
+  ctx.clearRect(0, 0, w, h);
+  if (!data.length) {
+    ctx.fillStyle = '#4a5568'; ctx.font = '12px monospace';
+    ctx.textAlign = 'center'; ctx.fillText('暂无数据', w/2, h/2);
+    return;
+  }
+
+  const nets = data.map(d => d.net);
+  const maxNet = Math.max(...nets), minNet = Math.min(...nets);
+  const maxAbs = Math.max(Math.abs(maxNet), Math.abs(minNet)) || 1;
+
+  // 成交量柱状（底部）
+  const vols = data.map(d => d.total || 0);
+  const maxVol = Math.max(...vols) || 1;
+
+  const pad = { l: 55, r: 10, t: 20, b: 50 };
+  const cw = w - pad.l - pad.r, ch = h - pad.t - pad.b;
+
+  const x = (i) => pad.l + (i / (data.length - 1)) * cw;
+  const yNet = (v) => pad.t + (1 - (v + maxAbs) / (2 * maxAbs)) * ch;
+  const yVol = (v) => h - pad.b + (-v / maxVol) * (ch * 0.25);
+
+  // 网格
+  ctx.strokeStyle = '#1f2d4a'; ctx.lineWidth = 0.5;
+  for (let i = 0; i <= 4; i++) {
+    const yy = pad.t + (i / 4) * ch;
+    ctx.beginPath(); ctx.moveTo(pad.l, yy); ctx.lineTo(w - pad.r, yy); ctx.stroke();
+    const label = (maxAbs - (i / 2) * maxAbs);
+    ctx.fillStyle = '#4a5568'; ctx.font = '9px monospace';
+    ctx.textAlign = 'right'; ctx.fillText(fmtK(label), pad.l - 4, yy + 3);
+  }
+
+  // 零线
+  const zeroY = yNet(0);
+  ctx.strokeStyle = '#374151'; ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath(); ctx.moveTo(pad.l, zeroY); ctx.lineTo(w - pad.r, zeroY); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // 成交量柱状
+  const barW = Math.max(2, cw / data.length - 1);
+  data.forEach((d, i) => {
+    const bx = x(i) - barW / 2;
+    const bh = Math.max(1, (d.total || 0) / maxVol * ch * 0.25);
+    ctx.fillStyle = d.net >= 0 ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)';
+    ctx.fillRect(bx, zeroY - bh, barW, bh);
+  });
+
+  // 净流入线（面积图）
+  ctx.beginPath();
+  data.forEach((d, i) => i === 0 ? ctx.moveTo(x(i), yNet(d.net)) : ctx.lineTo(x(i), yNet(d.net)));
+  ctx.lineTo(x(data.length - 1), zeroY);
+  ctx.lineTo(x(0), zeroY);
+  ctx.closePath();
+  const grad = ctx.createLinearGradient(0, pad.t, 0, h - pad.b);
+  grad.addColorStop(0, 'rgba(34,197,94,0.2)');
+  grad.addColorStop(0.5, 'rgba(59,130,246,0.05)');
+  grad.addColorStop(1, 'rgba(239,68,68,0.2)');
+  ctx.fillStyle = grad; ctx.fill();
+
+  // 净流入线
+  ctx.beginPath();
+  data.forEach((d, i) => i === 0 ? ctx.moveTo(x(i), yNet(d.net)) : ctx.lineTo(x(i), yNet(d.net)));
+  ctx.strokeStyle = data[data.length-1].net >= 0 ? '#22c55e' : '#ef4444';
+  ctx.lineWidth = 1.5; ctx.stroke();
+
+  // x轴时间标签（每6个点一个）
+  ctx.fillStyle = '#4a5568'; ctx.font = '9px monospace'; ctx.textAlign = 'center';
+  for (let i = 0; i < data.length; i += Math.max(1, Math.floor(data.length / 8))) {
+    ctx.fillText(data[i].dt || '', x(i), h - pad.b + 14);
+  }
+
+  // 标题
+  ctx.fillStyle = '#f0b90b'; ctx.font = '11px monospace'; ctx.textAlign = 'left';
+  ctx.fillText(sym, pad.l, 14);
+  const last = data[data.length-1];
+  ctx.fillStyle = last.net >= 0 ? '#22c55e' : '#ef4444';
+  ctx.fillText('净:' + fmtK(last.net), pad.l + 70, 14);
+}
+
+async function loadFunding() {
+  try {
+    const r = await fetch(`${API}/api/funding`);
+    const d = await r.json();
+    const grid = document.getElementById('fundingGrid');
+    grid.innerHTML = d.map(x => {
+      const c = x.funding_rate > 0 ? '#22c55e' : '#ef4444';
+      const dir = x.funding_rate > 0 ? '🟢多头' : '🔴空头';
+      const alert = Math.abs(x.funding_rate) > 0.0005 ? '⚠️' : '';
+      return `<div class="funding-card">
+        <div class="sym">${x.symbol}</div>
+        <div class="fr" style="color:${c}">${(x.funding_rate*100).toFixed(4)}% ${alert}</div>
+        <div class="mp">${dir} · $${x.mark_price.toLocaleString('en', {minimumFractionDigits:2, maximumFractionDigits:4})}</div>
+      </div>`;
+    }).join('');
+  } catch(e) { document.getElementById('fundingGrid').innerHTML = '<div style="color:#ef4444;padding:20px">加载失败</div>'; }
+}
+
+loadData();
+setInterval(loadData, 60000);
+</script>
+</body>
+</html>
