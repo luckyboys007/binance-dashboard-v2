@@ -16,6 +16,13 @@ PORT = 18999
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=SCRIPT_DIR), name="static")
 
+TRADFI = {"USDCUSDT","USDTUSDT","USD1USDT","BNBUSDT","XAUUSDT","XAGUSDT",
+          "TUSDUSDT","BUSDUSDT","DAIUSDT","FDUSDUSDT",
+          "SOXLUSDT","SOXXUSDT","KORUUSDT","EURLUSDT","JPUSUSDT",
+          "MCOUSDT","TCFUSDT","SKHYNIXUSDT","SKHYUSDT","SPCXUSDT",
+          "CLUSDT","MUUSDT","NMHUSDT","SNXXUSDT","INJUSDT",
+          "GFTUSDT","BMHUSDT"}
+
 # ── helpers ──────────────────────────────────────────────
 def get_conn(agg=True):
     d = DB2 if agg else DB
@@ -80,10 +87,57 @@ def _fetch_kline(symbol):
         _kline_cache[symbol] = result
         return result
     except:
-        return {"pct24": 0, "pct72h": 0, "pct7d": 0, "high24": 0, "low24": 0,
-                "close24": 0, "vol_now": 0, "vol_5h_avg": 0, "vol_ratio": 1.0, "ts": now}
+        return {"pct5m": 0, "pct1h": 0, "pct24": 0, "pct72h": 0, "pct7d": 0,
+                "high24": 0, "low24": 0, "close24": 0, "vol_now": 0,
+                "vol_5h_avg": 0, "vol_ratio": 1.0, "ts": now}
 
 # ── inflow data from agg DB ──────────────────────────────
+def _backfill_missing_symbols(symbols):
+    """Auto-backfill new top-20 symbols into agg5 from Binance klines."""
+    import urllib.request, urllib.parse, json
+    conn = get_conn(agg=True)
+    # check which symbols already have data
+    rows = conn.execute("SELECT DISTINCT symbol FROM agg5").fetchall()
+    existing = {r[0] for r in rows}
+    missing = [s for s in symbols if s not in existing]
+    conn.close()
+    if not missing:
+        return
+    for sym in missing:
+        try:
+            now = int(time.time())
+            url = (f"https://fapi.binance.com/fapi/v1/klines?symbol={urllib.parse.quote(sym)}"
+                   f"&interval=1h&limit=720")  # 30 days futures
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                klines = json.loads(r.read())
+            if not klines:
+                continue
+            conn2 = get_conn(agg=True)
+            for k in klines:
+                open_t = int(k[0] / 1000)
+                bucket = open_t // 300
+                vol = float(k[5])
+                close_p = float(k[4])
+                # synthetic: split into buy/sell by net direction from close vs open
+                is_buy = float(k[4]) >= float(k[1])
+                net = vol if is_buy else -vol
+                conn2.execute("""
+                    INSERT INTO agg5 (bucket, symbol, net, total_vol, buy_cnt, sell_cnt,
+                                     buy_vol, sell_vol, big_buy, big_sell, max_order)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(symbol, bucket) DO UPDATE SET
+                        net=net+excluded.net, total_vol=total_vol+excluded.total_vol,
+                        buy_cnt=buy_cnt+excluded.buy_cnt, sell_cnt=sell_cnt+excluded.sell_cnt,
+                        buy_vol=buy_vol+excluded.buy_vol, sell_vol=sell_vol+excluded.sell_vol
+                """, (bucket, sym, net, vol,
+                      1 if is_buy else 0, 0 if is_buy else 1,
+                      vol if is_buy else 0, 0 if is_buy else vol, 0, 0, 0))
+            conn2.commit()
+            conn2.close()
+        except:
+            pass
+
 def _load_inflow(symbols, now_ts):
     periods = [(300,"m5"),(3600,"m60"),(7200,"m120"),(86400,"day"),(259200,"d3"),(604800,"d7")]
     conn = get_conn(agg=True)
@@ -172,21 +226,34 @@ def _build_signals(sym, n, kline):
 def summary():
     t0 = time.time(); now = int(time.time())
     import urllib.request, json
-    with urllib.request.urlopen("https://api.binance.com/api/v3/ticker/24hr", timeout=5) as r:
+    # use fapi (futures) volume so it matches the funding table
+    with urllib.request.urlopen("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=5) as r:
         tickers = json.loads(r.read())
+    # build fapi ticker map: price/pct from futures data (covers all symbols in list)
+    fapi_map = {t["symbol"]: t for t in tickers}
     symbols = sorted(
-        [t["symbol"] for t in tickers if t["symbol"].endswith("USDT") and float(t.get("quoteVolume",0))>1e6],
-        key=lambda s: float(next((x for x in tickers if x["symbol"]==s),{}).get("quoteVolume",0)), reverse=True
+        [t["symbol"] for t in tickers
+         if t["symbol"].endswith("USDT") and float(t.get("quoteVolume", 0)) > 1e6
+         and t["symbol"] not in TRADFI],
+        key=lambda s: float(fapi_map[s].get("quoteVolume", 0)),
+        reverse=True
     )[:20]
+    _backfill_missing_symbols(symbols)  # auto-backfill new symbols into agg5
     inflow = _load_inflow(symbols, now)
     items = []
     for sym in symbols:
-        kline = _fetch_kline(sym)
+        ft = fapi_map.get(sym, {})
+        # price/pct from futures data (spot may not have the symbol)
+        price24 = float(ft.get("lastPrice", 0))
+        open24  = float(ft.get("openPrice", 0))
+        pct24   = (price24 / open24 - 1) * 100 if open24 > 0 else 0
+        # 1h/5m pct from kline (spot only)
+        kline   = _fetch_kline(sym)
         signals, smart = _build_signals(sym, inflow.get(sym,{}), kline)
         nm=n=inflow.get(sym,{}); nm60=nm.get("m60",{}); nm5=nm.get("m5",{}); nday=nm.get("day",{}); nd3=nm.get("d3",{})
-        items.append({"symbol":sym,"price":kline["close24"],
+        items.append({"symbol":sym,"price":price24 or kline["close24"],
                       "pct5m":kline["pct5m"],"pct1h":kline["pct1h"],
-                      "pct":kline["pct24"],
+                      "pct":pct24 or kline["pct24"],
                       "pct72h":kline["pct72h"],"pct7d":kline["pct7d"],"vol_ratio":kline["vol_ratio"],
                       "net5":nm5.get("net",0),"net60":nm60.get("net",0),"net_day":nday.get("net",0),"net72h":nd3.get("net",0),
                       "smart_ratio":smart,
@@ -195,7 +262,7 @@ def summary():
                       "big_buy_cnt":nm.get("big",{}).get("big_buy_cnt",0),
                       "big_sell_cnt":nm.get("big",{}).get("big_sell_cnt",0),
                       "signals":signals})
-    items.sort(key=lambda x: len(x["signals"]), reverse=True)
+    items.sort(key=lambda x: float(fapi_map[x["symbol"]].get("quoteVolume", 0)), reverse=True)
     conn2 = get_conn(agg=False)
     row = conn2.execute("SELECT MAX(ts) FROM trades").fetchone()
     db_last = datetime.fromtimestamp(row[0], tz=timezone.utc).strftime("%m-%d %H:%M") if row and row[0] else "-"
@@ -218,24 +285,31 @@ def history(symbol: str, hours: int = 24):
 def funding():
     import urllib.request, json
     try:
+        # same top-20 by fapi quoteVolume as signals table
+        with urllib.request.urlopen("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=5) as r:
+            tickers = json.loads(r.read())
+        symbols = sorted(
+            [t["symbol"] for t in tickers
+         if t["symbol"].endswith("USDT") and float(t.get("quoteVolume", 0)) > 1e6
+         and t["symbol"] not in TRADFI],
+            key=lambda s: float(next((x for x in tickers if x["symbol"] == s), {}).get("quoteVolume", 0)),
+            reverse=True
+        )[:20]
+
+        # fetch funding rates
         req = urllib.request.Request(
             "https://fapi.binance.com/fapi/v1/premiumIndex",
             headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
         )
-        r = urllib.request.urlopen(req, timeout=8)
-        raw = json.loads(r.read())
-        rows = []
-        for x in raw:
-            sym = x.get("symbol","")
-            if not sym.endswith("USDT"):
-                continue
-            fr = float(x.get("lastFundingRate", 0))
-            mp = float(x.get("markPrice", 0))
-            rows.append({"symbol": sym, "funding_rate": fr, "mark_price": mp})
-        rows.sort(key=lambda a: abs(a["funding_rate"]), reverse=True)
-        return rows[:20]
+        r2 = urllib.request.urlopen(req, timeout=8)
+        fr_raw = json.loads(r2.read())
+
+        fr_map = {x["symbol"]: float(x.get("lastFundingRate", 0))
+                  for x in fr_raw if x["symbol"].endswith("USDT")}
+
+        return [{"symbol": sym, "funding_rate": fr_map.get(sym, 0), "mark_price": 0} for sym in symbols]
     except:
-        return [{"symbol":"BTCUSDT","funding_rate":0.000123,"mark_price":78000}]
+        return [{"symbol":"BTCUSDT","funding_rate":0.0001,"mark_price":78000}]
 
 @app.get("/")
 def index():

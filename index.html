@@ -73,6 +73,10 @@
       border-bottom: 1px solid #1f2d4a; position: sticky; top: 0;
       background: #0a0e1a; white-space: nowrap; z-index: 10;
     }
+    th.sortable { cursor: pointer; user-select: none; }
+    th.sortable:hover { color: #f0b90b; }
+    th.sorted-asc .sort-arrow::after { content: ' ▲'; opacity: 1; color: #f0b90b; }
+    th.sorted-desc .sort-arrow::after { content: ' ▼'; opacity: 1; color: #f0b90b; }
     tr:hover td { background: #111827; }
     td { padding: 10px 10px; border-bottom: 1px solid #1a2438; vertical-align: middle; white-space: nowrap; font-family: 'SimHei', 'Microsoft YaHei', sans-serif; font-size: 13px; }
     .symbol { font-weight: 700; color: #f0b90b; font-size: 15px; }
@@ -206,17 +210,17 @@
       <tr>
         <th>#</th>
         <th>币种</th>
-        <th>现价</th>
-        <th>5m%</th>
-        <th>1h%</th>
-        <th>24h%</th>
-        <th>72h%</th>
-        <th>7d%</th>
-        <th>量比</th>
-        <th>5m净流</th>
-        <th>1h净流</th>
-        <th>24h净流</th>
-        <th>72h净流</th>
+        <th class="sortable" data-key="price" onclick="sortBy('price')">现价 <span class="sort-arrow"></span></th>
+        <th class="sortable" data-key="pct5m"  onclick="sortBy('pct5m')">5m% <span class="sort-arrow"></span></th>
+        <th class="sortable" data-key="pct1h"  onclick="sortBy('pct1h')">1h% <span class="sort-arrow"></span></th>
+        <th class="sortable" data-key="pct"     onclick="sortBy('pct')">24h% <span class="sort-arrow"></span></th>
+        <th class="sortable" data-key="pct72h"  onclick="sortBy('pct72h')">72h% <span class="sort-arrow"></span></th>
+        <th class="sortable" data-key="pct7d"   onclick="sortBy('pct7d')">7d% <span class="sort-arrow"></span></th>
+        <th class="sortable" data-key="vol_ratio" onclick="sortBy('vol_ratio')">量比 <span class="sort-arrow"></span></th>
+        <th class="sortable" data-key="net5"    onclick="sortBy('net5')">5m净流 <span class="sort-arrow"></span></th>
+        <th class="sortable" data-key="net60"   onclick="sortBy('net60')">1h净流 <span class="sort-arrow"></span></th>
+        <th class="sortable" data-key="net_day" onclick="sortBy('net_day')">24h净流 <span class="sort-arrow"></span></th>
+        <th class="sortable" data-key="net72h"  onclick="sortBy('net72h')">72h净流 <span class="sort-arrow"></span></th>
         <th>聪明钱</th>
         <th>信号</th>
       </tr>
@@ -242,6 +246,24 @@
 <script>
 const API = window.location.origin;
 let lastData = null;
+let sortState = { key: null, asc: true };
+
+function sortBy(key) {
+  if (sortState.key === key) {
+    sortState.asc = !sortState.asc;
+  } else {
+    sortState.key = key;
+    sortState.asc = false; // default: desc (biggest first)
+  }
+  // update header classes
+  document.querySelectorAll('th.sortable').forEach(th => {
+    th.classList.remove('sorted-asc', 'sorted-desc');
+  });
+  const th = document.querySelector(`th[data-key="${key}"]`);
+  if (th) th.classList.add(sortState.asc ? 'sorted-asc' : 'sorted-desc');
+  // re-render
+  if (lastData && lastData.items) renderTable(lastData.items);
+}
 
 function fmtK(v) {
   if (v === null || v === undefined) return '—';
@@ -311,35 +333,7 @@ async function loadData() {
     document.getElementById('statStruct').textContent= `结构 ${struct}`;
     document.getElementById('statExtreme').textContent= `极端 ${extreme}`;
 
-    // 表格
-    let html = '';
-    items.forEach((item, i) => {
-      const net5c  = item.net5  > 0 ? 'net-green' : item.net5  < 0 ? 'net-red' : '';
-      const net60c = item.net60 > 0 ? 'net-green' : item.net60 < 0 ? 'net-red' : '';
-      const netDc  = item.net_day > 0 ? 'net-green' : item.net_day < 0 ? 'net-red' : '';
-      const net72c = item.net72h > 0 ? 'net-green' : item.net72h < 0 ? 'net-red' : '';
-      const pctC   = (v) => v > 0 ? 'up' : v < 0 ? 'down' : 'neutral';
-
-      const tags = item.signals.map(signalTag).join('');
-      html += `<tr>
-        <td style="color:#4a5568">${i+1}</td>
-        <td class="symbol">${item.symbol}</td>
-        <td class="price">$${item.price.toLocaleString('en', {minimumFractionDigits:2, maximumFractionDigits:4})}</td>
-        <td class="${pctC(item.pct5m)}">${item.pct5m >= 0 ? '+' : ''}${item.pct5m.toFixed(2)}%</td>
-        <td class="${pctC(item.pct1h)}">${item.pct1h >= 0 ? '+' : ''}${item.pct1h.toFixed(2)}%</td>
-        <td>${fmtPct(item.pct)}</td>
-        <td class="${pctC(item.pct72h)}">${item.pct72h >= 0 ? '+' : ''}${item.pct72h.toFixed(2)}%</td>
-        <td class="${pctC(item.pct7d)}">${item.pct7d >= 0 ? '+' : ''}${item.pct7d.toFixed(2)}%</td>
-        <td>${volRatioTag(item.vol_ratio)}</td>
-        <td class="net-val ${net5c}">${fmtK(item.net5)}</td>
-        <td class="net-val ${net60c}">${fmtK(item.net60)}</td>
-        <td class="net-val ${netDc}">${fmtK(item.net_day)}</td>
-        <td class="net-val ${net72c}">${fmtK(item.net72h)}</td>
-        <td>${smartTag(item.smart_ratio)}</td>
-        <td>${tags}</td>
-      </tr>`;
-    });
-    document.getElementById('tableBody').innerHTML = html || '<tr><td colspan="15" style="color:#4a5568;text-align:center;padding:30px">暂无数据</td></tr>';
+    renderTable(items);
 
     // 图表下拉
     const sel = document.getElementById('chartSymbol');
@@ -348,6 +342,47 @@ async function loadData() {
   } catch(e) {
     document.getElementById('tableBody').innerHTML = `<tr><td colspan="15" style="color:#ef4444;text-align:center;padding:30px">加载失败: ${e.message}</td></tr>`;
   }
+}
+
+function renderTable(items) {
+  // apply sort
+  let sorted = [...items];
+  if (sortState.key) {
+    sorted.sort((a, b) => {
+      let av = a[sortState.key], bv = b[sortState.key];
+      if (av == null) av = 0;
+      if (bv == null) bv = 0;
+      return sortState.asc ? (av - bv) : (bv - av);
+    });
+  }
+  let html = '';
+  sorted.forEach((item, i) => {
+    const net5c  = item.net5  > 0 ? 'net-green' : item.net5  < 0 ? 'net-red' : '';
+    const net60c = item.net60 > 0 ? 'net-green' : item.net60 < 0 ? 'net-red' : '';
+    const netDc  = item.net_day > 0 ? 'net-green' : item.net_day < 0 ? 'net-red' : '';
+    const net72c = item.net72h > 0 ? 'net-green' : item.net72h < 0 ? 'net-red' : '';
+    const pctC   = (v) => v > 0 ? 'up' : v < 0 ? 'down' : 'neutral';
+
+    const tags = item.signals.map(signalTag).join('');
+    html += `<tr>
+      <td style="color:#4a5568">${i+1}</td>
+      <td class="symbol">${item.symbol}</td>
+      <td class="price">$${item.price.toLocaleString('en', {minimumFractionDigits:2, maximumFractionDigits:4})}</td>
+      <td class="${pctC(item.pct5m)}">${item.pct5m >= 0 ? '+' : ''}${item.pct5m.toFixed(2)}%</td>
+      <td class="${pctC(item.pct1h)}">${item.pct1h >= 0 ? '+' : ''}${item.pct1h.toFixed(2)}%</td>
+      <td>${fmtPct(item.pct)}</td>
+      <td class="${pctC(item.pct72h)}">${item.pct72h >= 0 ? '+' : ''}${item.pct72h.toFixed(2)}%</td>
+      <td class="${pctC(item.pct7d)}">${item.pct7d >= 0 ? '+' : ''}${item.pct7d.toFixed(2)}%</td>
+      <td>${volRatioTag(item.vol_ratio)}</td>
+      <td class="net-val ${net5c}">${fmtK(item.net5)}</td>
+      <td class="net-val ${net60c}">${fmtK(item.net60)}</td>
+      <td class="net-val ${netDc}">${fmtK(item.net_day)}</td>
+      <td class="net-val ${net72c}">${fmtK(item.net72h)}</td>
+      <td>${smartTag(item.smart_ratio)}</td>
+      <td>${tags}</td>
+    </tr>`;
+  });
+  document.getElementById('tableBody').innerHTML = html || '<tr><td colspan="15" style="color:#4a5568;text-align:center;padding:30px">暂无数据</td></tr>';
 }
 
 function switchTab(name, btn) {
