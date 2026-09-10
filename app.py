@@ -47,49 +47,99 @@ def _fetch_kline(symbol):
     cached = _kline_cache.get(symbol)
     if cached and (now - cached["ts"]) < _kline_cache_ttl:
         return cached
-    import urllib.request, json
-    try:
-        url_h = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1h&limit=24"
-        with urllib.request.urlopen(url_h, timeout=5) as r:
-            data_h = json.loads(r.read())
-        url_m = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=3"
-        with urllib.request.urlopen(url_m, timeout=5) as r:
-            data_m = json.loads(r.read())
-        url_d = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1d&limit=8"
-        with urllib.request.urlopen(url_d, timeout=5) as r:
-            data_d = json.loads(r.read())
-        vols_h = [float(d[5]) for d in data_h]
-        vol_now    = vols_h[-1] if vols_h else 0
-        vol_5h_avg = sum(vols_h[-6:-1]) / max(1, len(vols_h)-1) if len(vols_h) > 1 else vol_now
-        vol_ratio  = vol_now / vol_5h_avg if vol_5h_avg > 0 else 1.0
-        url_t = f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}"
-        with urllib.request.urlopen(url_t, timeout=5) as r:
-            td = json.loads(r.read())
-        high24  = float(td["highPrice"]); low24 = float(td["lowPrice"])
-        close24 = float(td["lastPrice"]); pct24 = float(td["priceChangePercent"])
-        pct7d = 0.0
-        if len(data_d) >= 8:
-            pct7d = (float(data_d[-1][4]) / float(data_d[0][1]) - 1) * 100 if float(data_d[0][1]) else 0.0
-        # 5min, 1h, 72h pct from klines
-        pct5m = 0.0
-        if len(data_m) >= 2:
-            pct5m = (float(data_m[-1][4]) / float(data_m[0][1]) - 1) * 100 if float(data_m[0][1]) else 0.0
-        pct1h = 0.0
-        if len(data_h) >= 2:
-            pct1h = (float(data_h[-1][4]) / float(data_h[-2][4]) - 1) * 100 if float(data_h[-2][4]) else 0.0
-        pct72h = 0.0
-        if len(data_d) >= 4:
-            pct72h = (float(data_d[-1][4]) / float(data_d[-4][1]) - 1) * 100 if float(data_d[-4][1]) else 0.0
-        result = {"pct5m": pct5m, "pct1h": pct1h,
-                  "pct24": pct24, "pct72h": pct72h, "pct7d": pct7d,
-                  "high24": high24, "low24": low24, "close24": close24,
-                  "vol_now": vol_now, "vol_5h_avg": vol_5h_avg, "vol_ratio": vol_ratio, "ts": now}
-        _kline_cache[symbol] = result
-        return result
-    except:
-        return {"pct5m": 0, "pct1h": 0, "pct24": 0, "pct72h": 0, "pct7d": 0,
-                "high24": 0, "low24": 0, "close24": 0, "vol_now": 0,
-                "vol_5h_avg": 0, "vol_ratio": 1.0, "ts": now}
+    import urllib.request, urllib.parse, json
+
+    def _klines(base_url, sym, interval, limit):
+        url = f"{base_url}?symbol={urllib.parse.quote(sym)}&interval={interval}&limit={limit}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return json.loads(r.read())
+
+    def _ticker24(base_url, sym):
+        url = f"{base_url}?symbol={urllib.parse.quote(sym)}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return json.loads(r.read())
+
+    SPOT = "https://api.binance.com/api/v3/klines"
+    FAPI = "https://fapi.binance.com/fapi/v1/klines"
+
+    for base in [SPOT, FAPI]:
+        try:
+            data_h = _klines(base, symbol, "1h", 24)
+            data_m = _klines(base, symbol, "1m", 3)
+            data_d = _klines(base, symbol, "1d", 8)
+            ticker_base = base.rsplit("/", 1)[0]  # strip /klines → .../api/v3 or .../fapi/v1
+            td = _ticker24(f"{ticker_base}/ticker/24hr", symbol)
+
+            vols_h = [float(d[5]) for d in data_h]
+            vol_now    = vols_h[-1] if vols_h else 0
+            vol_5h_avg = sum(vols_h[-6:-1]) / max(1, len(vols_h)-1) if len(vols_h) > 1 else vol_now
+            vol_ratio  = vol_now / vol_5h_avg if vol_5h_avg > 0 else 1.0
+            high24  = float(td["highPrice"]); low24 = float(td["lowPrice"])
+            close24 = float(td["lastPrice"]); pct24 = float(td["priceChangePercent"])
+            pct7d = 0.0
+            if len(data_d) >= 8:
+                pct7d = (float(data_d[-1][4]) / float(data_d[0][1]) - 1) * 100 if float(data_d[0][1]) else 0.0
+            pct5m = 0.0
+            if len(data_m) >= 2:
+                pct5m = (float(data_m[-1][4]) / float(data_m[0][1]) - 1) * 100 if float(data_m[0][1]) else 0.0
+            pct1h = 0.0
+            if len(data_h) >= 2:
+                pct1h = (float(data_h[-1][4]) / float(data_h[-2][4]) - 1) * 100 if float(data_h[-2][4]) else 0.0
+            pct72h = 0.0
+            if len(data_d) >= 4:
+                pct72h = (float(data_d[-1][4]) / float(data_d[-4][1]) - 1) * 100 if float(data_d[-4][1]) else 0.0
+            result = {"pct5m": pct5m, "pct1h": pct1h,
+                      "pct24": pct24, "pct72h": pct72h, "pct7d": pct7d,
+                      "high24": high24, "low24": low24, "close24": close24,
+                      "vol_now": vol_now, "vol_5h_avg": vol_5h_avg, "vol_ratio": vol_ratio, "ts": now}
+            _kline_cache[symbol] = result
+            return result
+        except:
+            continue
+
+    return {"pct5m": 0, "pct1h": 0, "pct24": 0, "pct72h": 0, "pct7d": 0,
+            "high24": 0, "low24": 0, "close24": 0, "vol_now": 0,
+            "vol_5h_avg": 0, "vol_ratio": 1.0, "ts": now}
+
+# ── live bucket update (keeps agg5 current for net5/net60 queries) ──
+def _refresh_live_bucket(symbols):
+    """Fetch latest 1h kline for each symbol and upsert the current bucket into agg5."""
+    import urllib.request, urllib.parse, json
+    conn = get_conn(agg=True)
+    now = int(time.time())
+    current_bucket = now // 300
+    for sym in symbols:
+        try:
+            url = (f"https://fapi.binance.com/fapi/v1/klines"
+                   f"?symbol={urllib.parse.quote(sym)}&interval=5m&limit=5")
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                klines = json.loads(r.read())
+            if not klines:
+                continue
+            for k in klines:
+                bucket = int(int(k[0]) // 300000)  # ms → bucket
+                if bucket < current_bucket:  # only update closed buckets
+                    vol = float(k[5])
+                    is_buy = float(k[4]) >= float(k[1])
+                    net = vol if is_buy else -vol
+                    conn.execute("""
+                        INSERT INTO agg5 (bucket, symbol, net, total_vol, buy_cnt, sell_cnt,
+                                         buy_vol, sell_vol, big_buy, big_sell, max_order)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                        ON CONFLICT(symbol, bucket) DO UPDATE SET
+                            net=excluded.net, total_vol=excluded.total_vol,
+                            buy_cnt=excluded.buy_cnt, sell_cnt=excluded.sell_cnt,
+                            buy_vol=excluded.buy_vol, sell_vol=excluded.sell_vol
+                    """, (bucket, sym, net, vol,
+                          1 if is_buy else 0, 0 if is_buy else 1,
+                          vol if is_buy else 0, 0 if is_buy else vol, 0, 0, 0))
+            conn.commit()
+        except Exception:
+            pass
+    conn.close()
 
 # ── inflow data from agg DB ──────────────────────────────
 def _backfill_missing_symbols(symbols):
@@ -239,6 +289,7 @@ def summary():
         reverse=True
     )[:20]
     _backfill_missing_symbols(symbols)  # auto-backfill new symbols into agg5
+    _refresh_live_bucket(symbols)       # update current bucket in agg5 for net5/net60
     inflow = _load_inflow(symbols, now)
     items = []
     for sym in symbols:
